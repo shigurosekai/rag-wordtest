@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>单词学习</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>背单词小游戏</h1>
+
+        <div id="mode-selection" class="mode-selection">
+            <h2>请选择游戏模式</h2>
+            <div class="mode-buttons">
+                <button onclick="startGame('en-to-zh')">英文猜中文</button>
+                <button onclick="startGame('zh-to-en')">中文猜英文</button>
+            </div>
+        </div>
+
+        <div id="game-interface" class="game-interface" style="display: none;">
+            <div id="score-display">得分: <span id="current-score">0</span> / <span id="total-attempts">0</span> (正确率: <span id="correctness-rate">0.00%</span>)</div>
+            <p>当前模式：<span id="current-mode">英文猜中文</span></p>
+            <p id="question-text">基础单词：<span id="base-word">点击下面按钮开始</span></p>
+            <div id="options"></div>
+            <div class="example-section">
+                <button id="show-example-btn" class="example-button" onclick="toggleExample()" style="display: none;">
+                    📖 显示例句
+                </button>
+                <div id="example-sentence" class="example-sentence" style="display: none;">
+                    <h3>例句：</h3>
+                    <p id="sentence-text"></p>
+                </div>
+            </div>
+            <div class="control-buttons">
+                <button onclick="getNewWord()">🎲 获取新题目</button>
+                <button onclick="backToModeSelection()">↩️ 返回选择模式</button>
+                <button onclick="showWrongWordsModal()" class="wrong-words-button">📝 错题集</button>
+            </div>
+            <p id="result"></p>
+        </div>
+
+        <div id="wrong-words-modal" class="modal">
+            <div class="modal-content">
+                <span class="close-button" onclick="closeWrongWordsModal()">&times;</span>
+                <h2>我的错题集</h2>
+                <div id="wrong-words-list"></div>
+                <div class="modal-actions">
+                    <button onclick="clearWrongWords()">清空错题集</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 添加音频元素 -->
+        <audio id="wordAudio" style="display: none;"></audio>
+    </div>
+
+    <script>
+        let answer = null;
+        let currentGameMode = null;
+        let currentBaseWord = null;
+        let currentExampleSentence = null;
+
+        const currentScoreSpan = document.getElementById('current-score');
+        const totalAttemptsSpan = document.getElementById('total-attempts');
+        const correctnessRateSpan = document.getElementById('correctness-rate');
+
+        async function fetchScoreAndRate() {
+            try {
+                const response = await fetch('/check_answer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'get_score_only' })
+                });
+                const data = await response.json();
+                updateScoreDisplay(data.score, data.total_attempts, data.correctness_rate);
+            } catch (error) {
+                console.error('获取分数失败:', error);
+            }
+        }
+
+        function updateScoreDisplay(score, attempts, rate) {
+            currentScoreSpan.textContent = score;
+            totalAttemptsSpan.textContent = attempts;
+            correctnessRateSpan.textContent = `${rate.toFixed(2)}%`;
+        }
+
+        function startGame(mode) {
+            currentGameMode = mode;
+            document.getElementById('mode-selection').style.display = 'none';
+            document.getElementById('game-interface').style.display = 'block';
+            document.getElementById('current-mode').innerText = mode === 'en-to-zh' ? '英文猜中文' : '中文猜英文';
+            document.getElementById('question-text').innerHTML = mode === 'en-to-zh' ?
+                '基础单词：<span id="base-word">点击下面按钮开始</span>' :
+                '中文释义：<span id="base-word">点击下面按钮开始</span>';
+            getNewWord();
+            fetchScoreAndRate();
+        }
+
+        function backToModeSelection() {
+            document.getElementById('mode-selection').style.display = 'block';
+            document.getElementById('game-interface').style.display = 'none';
+            document.getElementById('result').innerText = '';
+            document.getElementById('example-sentence').style.display = 'none';
+            document.getElementById('show-example-btn').style.display = 'none';
+            currentGameMode = null;
+            closeWrongWordsModal();
+        }
+
+        // 切换例句显示/隐藏
+        function toggleExample() {
+            const exampleSentence = document.getElementById('example-sentence');
+            const showExampleBtn = document.getElementById('show-example-btn');
+            
+            if (exampleSentence.style.display === 'none') {
+                exampleSentence.style.display = 'block';
+                showExampleBtn.textContent = '📖 隐藏例句';
+            } else {
+                exampleSentence.style.display = 'none';
+                showExampleBtn.textContent = '📖 显示例句';
+            }
+        }
+
+        // 使用浏览器原生的 Web Speech API
+        function playWordAudio(word) {
+            console.log('Attempting to play word:', word);  // 调试日志
+            if ('speechSynthesis' in window) {
+                console.log('Speech synthesis is available');  // 调试日志
+                try {
+                    const utterance = new SpeechSynthesisUtterance(word);
+                    utterance.lang = 'en-US';
+                    utterance.rate = 0.8;  // 语速稍慢
+                    utterance.pitch = 1;   // 音调
+                    utterance.volume = 1;  // 音量
+
+                    // 添加事件监听器
+                    utterance.onstart = () => console.log('Speech started');
+                    utterance.onend = () => console.log('Speech ended');
+                    utterance.onerror = (event) => console.error('Speech error:', event);
+
+                    // 获取可用的声音列表
+                    let voices = speechSynthesis.getVoices();
+                    // 尝试找到英语男声
+                    let englishVoice = voices.find(voice => 
+                        voice.lang.includes('en') && voice.name.includes('Male')
+                    );
+                    if (englishVoice) {
+                        utterance.voice = englishVoice;
+                    }
+
+                    // 播放语音
+                    window.speechSynthesis.speak(utterance);
+                } catch (error) {
+                    console.error('Error playing audio:', error);
+                }
+            } else {
+                console.error('Speech synthesis not supported in this browser');
+            }
+        }
+
+        // 确保在页面加载时获取可用的声音列表
+        window.addEventListener('load', function() {
+            console.log('Page loaded, checking speech synthesis...');
+            if ('speechSynthesis' in window) {
+                console.log('Speech synthesis is available');
+                // 获取声音列表
+                let voices = speechSynthesis.getVoices();
+                console.log('Available voices:', voices.map(v => `${v.name} (${v.lang})`));
+            } else {
+                console.error('Speech synthesis not supported in this browser');
+            }
+        });
+
+        // 如果声音列表还没有加载完成，等待它们加载
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+            speechSynthesis.onvoiceschanged = function() {
+                console.log('Voices loaded:', speechSynthesis.getVoices().map(v => `${v.name} (${v.lang})`));
+            };
+        }
+
+        // 修改 getNewWord 函数，确保在正确的时机调用播放
+        function getNewWord() {
+            fetch('/get_word', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ mode: currentGameMode })
+            }).then(res => res.json()).then(data => {
+                if (data.error) {
+                    document.getElementById("base-word").innerText = `错误: ${data.error}`;
+                    document.getElementById("options").innerHTML = "";
+                    document.getElementById("result").innerText = "";
+                    return;
+                }
+                document.getElementById("base-word").innerText = data.base_word;
+                answer = data.answer;
+                currentBaseWord = data.base_word;
+                currentExampleSentence = data.example_sentence;
+                
+                const container = document.getElementById("options");
+                container.innerHTML = "";
+                data.options.forEach(opt => {
+                    const btn = document.createElement("button");
+                    btn.innerText = opt;
+                    btn.classList.add('option-button');
+                    btn.onclick = () => { selectAnswer(opt, answer, data.base_word); };
+                    container.appendChild(btn);
+                });
+                document.getElementById("result").innerText = '';
+
+                // 处理例句按钮
+                if (data.example_sentence) {
+                    document.getElementById('sentence-text').innerText = data.example_sentence;
+                    document.getElementById('show-example-btn').style.display = 'inline-block';
+                    document.getElementById('example-sentence').style.display = 'none';
+                } else {
+                    document.getElementById('show-example-btn').style.display = 'none';
+                    document.getElementById('example-sentence').style.display = 'none';
+                }
+
+                // 确保在英文猜中文模式下播放
+                if (currentGameMode === 'en-to-zh') {
+                    console.log('Current mode is en-to-zh, playing audio for:', data.base_word);  // 调试日志
+                    setTimeout(() => playWordAudio(data.base_word), 100);  // 添加小延迟确保 DOM 更新完成
+                } else {
+                    console.log('Current mode is not en-to-zh, skipping audio');  // 调试日志
+                }
+            });
+        }
+
+        async function selectAnswer(selectedAnswer, correctAnswer, baseWord) {
+            try {
+                const response = await fetch('/check_answer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_answer: selectedAnswer,
+                        correct_option: correctAnswer,
+                        base_word: baseWord
+                    })
+                });
+                const data = await response.json();
+
+                document.getElementById("result").innerText = (selectedAnswer === correctAnswer ? "✅ 正确！" : "❌ 错了！");
+
+                updateScoreDisplay(data.score, data.total_attempts, data.correctness_rate);
+
+                getNewWord();
+
+            } catch (error) {
+                console.error('发送答案或校验失败:', error);
+                document.getElementById("result").innerText = "发送答案失败，请检查网络或控制台错误。";
+            }
+        }
+
+        // 显示错题集模态框
+        async function showWrongWordsModal() {
+            const modal = document.getElementById('wrong-words-modal');
+            const wrongWordsList = document.getElementById('wrong-words-list');
+            wrongWordsList.innerHTML = '加载中...';
+
+            try {
+                const response = await fetch('/get_wrong_words');
+                const data = await response.json();
+
+                if (data.wrong_words && data.wrong_words.length > 0) {
+                    let html = '<ul>';
+                    data.wrong_words.forEach(word => {
+                        html += `<li><strong>${word.base_word}</strong> &mdash; ${word.correct_answer}</li>`;
+                    });
+                    html += '</ul>';
+                    wrongWordsList.innerHTML = html;
+                } else {
+                    wrongWordsList.innerHTML = '<p>恭喜，您还没有错题！</p>';
+                }
+            } catch (error) {
+                console.error('获取错题集失败:', error);
+                wrongWordsList.innerHTML = '<p>获取错题集失败，请重试。</p>';
+            }
+            modal.style.display = 'flex';
+        }
+
+        function closeWrongWordsModal() {
+            document.getElementById('wrong-words-modal').style.display = 'none';
+        }
+
+        // 清空错题集
+        async function clearWrongWords() {
+            if (confirm('确定要清空错题集吗？')) {
+                try {
+                    const response = await fetch('/clear_wrong_words', { method: 'POST' });
+                    const data = await response.json();
+                    if (data.status === 'ok') {
+                        alert('错题集已清空！');
+                        showWrongWordsModal();
+                    }
+                } catch (error) {
+                    console.error('清空错题集失败:', error);
+                    alert('清空错题集失败，请重试。');
+                }
+            }
+        }
+    </script>
+
+    <!-- Live2D widget -->
+    <script src="https://cdn.jsdelivr.net/gh/stevenjoezhang/live2d-widget@latest/autoload.js"></script>
+</body>
+</html>
